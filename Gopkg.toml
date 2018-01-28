@@ -1,0 +1,14 @@
+
+# Refer to https://github.com/golang/dep/blob/master/docs/Gopkg.toml.md
+# for detailed Gopkg.toml documentation.
+
+[[constraint]]
+  name = "github.com/golang/glog"
+  revision = "44145f04b68c"
+
+[[constraint]]
+  name = "k8s.io/client-go"
+  revision = "076e344c86e"
+
+[[constraint]]
+  name = "github.com/Azure/azure-sdk-for-go"
