@@ -94,6 +94,82 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	*/
 	// I don't quite get the gatewayIPConfigs vs frontendIPConfigs
 
+	// THE NEXT CASE: RULES
+
+	// EXAMPLE 1: SIMPLE FANOUT
+	/*
+		apiVersion: extensions/v1beta1
+		kind: Ingress
+		metadata:
+			name: test-fanout
+			annotations:
+				ingress.kubernetes.io/rewrite-target: /
+		spec:
+			rules:
+			-	host: foo.bar.example.com
+				http:
+					paths:
+					-	path: /quux
+						backend:
+							serviceName: s1
+							servicePort: 80
+					-	path: /baz
+						backend:
+							serviceName: s2
+							servicePort: 80
+	*/
+
+	// EXAMPLE 1a: SIMPLE FANOUT WITH 404
+	// Spec.Backend is used if none of the Hosts in the ingress match
+	// the Host in the request header, and/or none of the paths match
+	// the URL of the request
+	/*
+		apiVersion: extensions/v1beta1
+		kind: Ingress
+		metadata:
+			name: test-fanout
+			annotations:
+				ingress.kubernetes.io/rewrite-target: /
+		spec:
+			rules:
+			-	host: foo.bar.example.com
+				http:
+					paths:
+					-	path: /quux
+						backend:
+							serviceName: s1
+							servicePort: 80
+					-	path: /baz
+						backend:
+							serviceName: s2
+							servicePort: 80
+			backend:
+				serviceName: testsvc
+				servicePort: 80
+	*/
+
+	// EXAMPLE 2: NAME BASED VIRTUAL HOSTING
+	/*
+		apiVersion: extensions/v1beta1
+		kind: Ingress
+		metadata:
+			name: test-vhost
+		spec:
+			rules:
+			-	host: foo.bar.example.com
+				http:
+					paths:
+						backend:
+							serviceName: s1
+							servicePort: 80
+			-	host: baz.quux.example.com
+				http:
+					paths:
+						backend:
+							serviceName: s2
+							servicePort: 80
+	*/
+
 	/*
 		The minimum we need to specify:
 		- location
