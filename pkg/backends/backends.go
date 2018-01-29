@@ -17,7 +17,7 @@ limitations under the License.
 package backends
 
 import (
-	"github.com/azure-app-gateway-k8s-ingress/pkg/utils"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/utils"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )

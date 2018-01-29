@@ -6,7 +6,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/arm/compute"
 	"github.com/Azure/azure-sdk-for-go/arm/network"
-	"github.com/azure-app-gateway-k8s-ingress/pkg/utils"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/utils"
 	"github.com/golang/glog"
 )
 

@@ -28,7 +28,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/arm/network"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
-	"github.com/azure-app-gateway-k8s-ingress/pkg/controller"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/controller"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
 
 	"github.com/golang/glog"
 	flag "github.com/spf13/pflag"
@@ -40,8 +41,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
-
-	"github.com/azure-app-gateway-k8s-ingress/pkg/context"
 )
 
 var (

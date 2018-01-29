@@ -24,7 +24,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/arm/resources/resources"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
-	"github.com/azure-app-gateway-k8s-ingress/pkg/context"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
 	"github.com/golang/glog"
 
 	"k8s.io/api/core/v1"
