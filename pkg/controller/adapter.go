@@ -77,20 +77,14 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	// - with a routing rule from the front end to the back end
 	// NEEDS TO MAP TO WHAT
 	/*
-		sslPolicy: { type: Predefined, name: AppGwSslPolicy20170401 (e.g.), minProtocolVersion: needed? }
 		gatewayIPCfgs: { subnet: cluster_subnet_ID }
-		// could skip authCerts/sslCerts for port-80 POC?
-		authCerts: { data: cert_public_data }  // weird, why is this not a KV reference or something?
-		sslCerts: { data: pfx_data, password: cert_password (PUT/create only!) }
-		fips: { { privateIPAddr, privateIPAllocMethod } | publicIPID: WHAT, subnet: cluster_subnet_id }
+		fips: { publicIPID: alloced, subnet: cluster_subnet_id }
 		frontendPorts: { port: spec.backend.servicePort }
-		probes: { do we need one of these?  Probably }
-		backendAddressPools: { how do we get one of these?  Need the nodes collection I guess }
+		probes: { TBD }
+		backendAddressPools: { create one and then assign nodes to it }
 		backendHTTP: { port: spec.backend.servicePort?, anything else? }
 		httpListeners: { feipcfg: ref, feport: ref, hostName: ???what???, sslCert: can skip for port 80 }
-		URLpathmaps: { defbep: ref, defbhttps: ref, defredircfg: ref, pathrules: any needed? }
 		reqroutingrules: { any needed or will defaults in URLpathmaps be enough for simple case? }
-		webappfwconfig: { enabled, OWASP, ver, detection }
 	*/
 	// I don't quite get the gatewayIPConfigs vs frontendIPConfigs
 
@@ -117,6 +111,19 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 						backend:
 							serviceName: s2
 							servicePort: 80
+	*/
+	// TODO: what annotations are supported and how do we need to translate them?
+	// NEEDS TO MAP TO
+	/*
+		gatewayIPCfgs: { subnet: cluster_subnet_ID }
+		fips: { publicIPID: alloced, subnet: cluster_subnet_id }
+		frontendPorts: { port: 80? }
+		probes: { TBD }
+		backendAddressPools: { how do we get one of these?  Need the nodes collection I guess }
+		backendHTTP: { port: spec.backend.servicePort } x N
+		httpListeners: { feipcfg: ref, feport: ref, hostName: host, sslCert: can skip for port 80 }
+		URLpathmaps: { defbep: ref, defbhttps: ref, defredircfg: ref, pathrules: path } x N
+		reqroutingrules: { urlpathmap: ref, ...? }
 	*/
 
 	// EXAMPLE 1a: SIMPLE FANOUT WITH 404
@@ -265,7 +272,52 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		},
 	}
 
-	//backendIPCs := ac.nicIPConfigs(backendIPCIDs)
+	frontendIPConfigurations := []network.ApplicationGatewayFrontendIPConfiguration{}
+	frontendPorts := []network.ApplicationGatewayFrontendPort{}
+	backendHTTPSettingsCollection := []network.ApplicationGatewayBackendHTTPSettings{}
+	httpListeners := []network.ApplicationGatewayHTTPListener{}
+	requestRoutingRules := []network.ApplicationGatewayRequestRoutingRule{}
+
+	if backend != nil {
+		frontendIPConfigurations = append(frontendIPConfigurations, network.ApplicationGatewayFrontendIPConfiguration{
+			Name: &frontendIPConfigurationName,
+			ApplicationGatewayFrontendIPConfigurationPropertiesFormat: &network.ApplicationGatewayFrontendIPConfigurationPropertiesFormat{
+				PublicIPAddress: resourceRef(publicIPID),
+			},
+		})
+		frontendPorts = append(frontendPorts, network.ApplicationGatewayFrontendPort{
+			Name: &frontendPortName,
+			ApplicationGatewayFrontendPortPropertiesFormat: &network.ApplicationGatewayFrontendPortPropertiesFormat{
+				Port: &servicePort, // presumably
+			},
+		})
+		backendHTTPSettingsCollection = append(backendHTTPSettingsCollection, network.ApplicationGatewayBackendHTTPSettings{
+			Name: &httpSettingsName,
+			ApplicationGatewayBackendHTTPSettingsPropertiesFormat: &network.ApplicationGatewayBackendHTTPSettingsPropertiesFormat{
+				Protocol: protocol,
+				Port:     &nodePort,
+			},
+		})
+		httpListeners = append(httpListeners, network.ApplicationGatewayHTTPListener{
+			Name: &httpListenerName,
+			ApplicationGatewayHTTPListenerPropertiesFormat: &network.ApplicationGatewayHTTPListenerPropertiesFormat{
+				FrontendIPConfiguration: resourceRef(frontendIPConfigurationID),
+				FrontendPort:            resourceRef(frontendPortID),
+				Protocol:                protocol,
+			},
+		})
+		requestRoutingRules = append(requestRoutingRules, network.ApplicationGatewayRequestRoutingRule{
+			Name: &requestRoutingRuleName,
+			ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
+				RuleType:            network.Basic,
+				BackendAddressPool:  resourceRef(backendPoolID),
+				BackendHTTPSettings: resourceRef(httpSettingsID),
+				HTTPListener:        resourceRef(httpListenerID),
+				//URLPathMap:            &id,
+				//RedirectConfiguration: &id,
+			},
+		})
+	}
 
 	gw := network.ApplicationGateway{
 		Name:     &gatewayName,
@@ -276,23 +328,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 				Name:     network.StandardMedium,
 				Tier:     network.Standard,
 			},
-			FrontendIPConfigurations: &[]network.ApplicationGatewayFrontendIPConfiguration{
-				network.ApplicationGatewayFrontendIPConfiguration{
-					Name: &frontendIPConfigurationName,
-					ApplicationGatewayFrontendIPConfigurationPropertiesFormat: &network.ApplicationGatewayFrontendIPConfigurationPropertiesFormat{
-						PublicIPAddress: resourceRef(publicIPID),
-						//Subnet:          resourceRef(gatewaySubnetID),  // forbidden for public IP
-					},
-				},
-			},
-			FrontendPorts: &[]network.ApplicationGatewayFrontendPort{
-				network.ApplicationGatewayFrontendPort{
-					Name: &frontendPortName,
-					ApplicationGatewayFrontendPortPropertiesFormat: &network.ApplicationGatewayFrontendPortPropertiesFormat{
-						Port: &servicePort, // presumably
-					},
-				},
-			},
+			FrontendIPConfigurations: &frontendIPConfigurations,
 			GatewayIPConfigurations: &[]network.ApplicationGatewayIPConfiguration{
 				network.ApplicationGatewayIPConfiguration{
 					Name: &gatewayIPConfigurationName,
@@ -301,64 +337,16 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 					},
 				},
 			},
+			FrontendPorts: &frontendPorts,
 			BackendAddressPools: &[]network.ApplicationGatewayBackendAddressPool{
 				network.ApplicationGatewayBackendAddressPool{
 					Name: &backendPoolName,
-					ApplicationGatewayBackendAddressPoolPropertiesFormat: &network.ApplicationGatewayBackendAddressPoolPropertiesFormat{
-					//BackendIPConfigurations: &backendIPCs,
-					// BackendAddresses: &[]network.ApplicationGatewayBackendAddress{
-					// 	network.ApplicationGatewayBackendAddress{
-					// 		IPAddress: &service.Spec.ClusterIP,
-					// 	},
-					// },
-					},
+					ApplicationGatewayBackendAddressPoolPropertiesFormat: &network.ApplicationGatewayBackendAddressPoolPropertiesFormat{},
 				},
 			},
-			BackendHTTPSettingsCollection: &[]network.ApplicationGatewayBackendHTTPSettings{
-				network.ApplicationGatewayBackendHTTPSettings{
-					Name: &httpSettingsName,
-					ApplicationGatewayBackendHTTPSettingsPropertiesFormat: &network.ApplicationGatewayBackendHTTPSettingsPropertiesFormat{
-						Protocol: protocol,
-						Port:     &nodePort,
-					},
-				},
-			},
-			HTTPListeners: &[]network.ApplicationGatewayHTTPListener{
-				network.ApplicationGatewayHTTPListener{
-					Name: &httpListenerName,
-					ApplicationGatewayHTTPListenerPropertiesFormat: &network.ApplicationGatewayHTTPListenerPropertiesFormat{
-						FrontendIPConfiguration: resourceRef(frontendIPConfigurationID),
-						FrontendPort:            resourceRef(frontendPortID),
-						Protocol:                protocol,
-					},
-				},
-			},
-			// URLPathMaps: &[]network.ApplicationGatewayURLPathMap{
-			// // what
-			// // roughly: path rule = { bepool, behttpsettings, paths[], redirectcgf }
-			// },
-			RequestRoutingRules: &[]network.ApplicationGatewayRequestRoutingRule{
-				network.ApplicationGatewayRequestRoutingRule{
-					Name: &requestRoutingRuleName,
-					ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
-						RuleType:            network.Basic,
-						BackendAddressPool:  resourceRef(backendPoolID),
-						BackendHTTPSettings: resourceRef(httpSettingsID),
-						HTTPListener:        resourceRef(httpListenerID),
-						//URLPathMap:            &id,
-						//RedirectConfiguration: &id,
-					},
-				},
-			},
-			// WebApplicationFirewallConfiguration: &network.ApplicationGatewayWebApplicationFirewallConfiguration{
-			// 	Enabled:            to.BoolPtr(true),
-			// 	FirewallMode:       network.Detection, /* or Prevention */
-			// 	RuleSetType:        to.StringPtr("OWASP"),
-			// 	RuleSetVersion:     to.StringPtr("what"),
-			// 	DisabledRuleGroups: &[]network.ApplicationGatewayFirewallDisabledRuleGroup{
-			// 	// what
-			// 	},
-			// },
+			BackendHTTPSettingsCollection: &backendHTTPSettingsCollection,
+			HTTPListeners: &httpListeners,
+			RequestRoutingRules: &requestRoutingRules,
 		},
 	}
 
