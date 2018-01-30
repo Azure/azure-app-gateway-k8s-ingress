@@ -8,6 +8,6 @@ user=$1
 vsuffix=$2
 
 set -e
-CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ./output/azl7ic ./cmd/azureag
-docker build --network hostbr -t ${user}/azl7ic:${vsuffix} -f Dockerfile .
+./build.sh
+docker build -t ${user}/azl7ic:${vsuffix} -f Dockerfile .
 docker push ${user}/azl7ic:${vsuffix}

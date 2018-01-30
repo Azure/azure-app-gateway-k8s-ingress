@@ -5,8 +5,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/arm/network"
 	"github.com/Azure/go-autorest/autorest/to"
-	"github.com/azure-app-gateway-k8s-ingress/pkg/context"
-	"github.com/azure-app-gateway-k8s-ingress/pkg/utils"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/utils"
 	"github.com/golang/glog"
 	"k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
