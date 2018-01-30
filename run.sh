@@ -7,4 +7,4 @@ fi
 user=$1
 vsuffix=$2
 
-docker run --mount type=bind,source=/home,destination=/home --network hostbr ${user}/azl7ic:${vsuffix}
+docker run --mount type=bind,source=/home,destination=/home ${user}/azl7ic:${vsuffix}
