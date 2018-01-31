@@ -1,0 +1,8 @@
+docker build -t ${user}/nginx-foo -f foo.Dockerfile .
+docker build -t ${user}/nginx-bar -f bar.Dockerfile .
+docker push ${user}/nginx-foo
+docker push ${user}/nginx-bar
+kubectl run nginx-foo --image=${user}/nginx-foo
+kubectl run nginx-bar --image=${user}/nginx-bar
+kubectl expose deployment nginx-foo --port=80 --target-port=80 --type=NodePort
+kubectl expose deployment nginx-bar --port=80 --target-port=80 --type=NodePort
