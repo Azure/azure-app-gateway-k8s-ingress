@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/arm/network"
 	"github.com/Azure/go-autorest/autorest/to"
@@ -191,43 +192,14 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		  - req routing rule (name, ruletype, bepref, httpsettingsref, httplistenerref)
 	*/
 
-	// right now, only tackle the Simplest Possible case
-	if len(ingress.Spec.Rules) > 0 {
-		glog.V(1).Infof("Rules not yet implemented for Azure Application Gateway ingress - use Backend only")
-		return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Rules not yet implemented")
-	}
-
+	// things we do not tackle right now
 	if len(ingress.Spec.TLS) > 0 {
 		glog.V(1).Infof("TLS not yet implemented for Azure Application Gateway ingress")
 		return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("TLS not yet implemented")
 	}
 
-	// all we need for the Simplest Possible case
 	backend := ingress.Spec.Backend
-
-	if backend == nil {
-		glog.V(1).Infof("We haven't done this kind yet")
-		return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("No backend")
-	}
-
-	service, err := serviceResolver(backend.ServiceName)
-	if err != nil {
-		glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
-		return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
-	}
-	_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
-	if err != nil {
-		glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
-		return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, err
-	}
-	servicePort := int32(backend.ServicePort.IntValue())
-	glog.V(1).Infof("Found service %s and it is on %s and port %d", service.Name, service.Spec.ClusterIP, nodePort)
-
-	// TODO: how?
-	protocol := network.HTTP
-	if servicePort == 443 {
-		protocol = network.HTTPS
-	}
+	rules := ingress.Spec.Rules
 
 	gatewayName, publicIPName := getGatewayName(ingress)
 
@@ -238,17 +210,6 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 
 	frontendIPConfigurationName := "k8spublicipcfg"
 	frontendIPConfigurationID := ac.fipID(gatewayName, frontendIPConfigurationName)
-
-	frontendPortName := "k8sfep"
-	frontendPortID := ac.fepID(gatewayName, frontendPortName)
-
-	httpListenerName := "k8s-defaultbackend-listener"
-	httpListenerID := ac.httpListenerID(gatewayName, httpListenerName)
-
-	httpSettingsName := "k8ssettings"
-	httpSettingsID := ac.httpSettingsID(gatewayName, httpSettingsName)
-
-	requestRoutingRuleName := "k8s-defaultbackend-routingrule"
 
 	gatewayVnetName := ac.vnetName
 	gatewaySubnetName := "agw-subnet"
@@ -272,20 +233,44 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		},
 	}
 
-	frontendIPConfigurations := []network.ApplicationGatewayFrontendIPConfiguration{}
 	frontendPorts := []network.ApplicationGatewayFrontendPort{}
 	backendHTTPSettingsCollection := []network.ApplicationGatewayBackendHTTPSettings{}
 	httpListeners := []network.ApplicationGatewayHTTPListener{}
+	urlPathMaps := []network.ApplicationGatewayURLPathMap{}
 	requestRoutingRules := []network.ApplicationGatewayRequestRoutingRule{}
 
 	if backend != nil {
-		frontendIPConfigurations = append(frontendIPConfigurations, network.ApplicationGatewayFrontendIPConfiguration{
-			Name: &frontendIPConfigurationName,
-			ApplicationGatewayFrontendIPConfigurationPropertiesFormat: &network.ApplicationGatewayFrontendIPConfigurationPropertiesFormat{
-				PublicIPAddress: resourceRef(publicIPID),
-			},
-		})
-		frontendPorts = append(frontendPorts, network.ApplicationGatewayFrontendPort{
+		service, err := serviceResolver(backend.ServiceName)
+		if err != nil {
+			glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
+			return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
+		}
+		_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
+		if err != nil {
+			glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
+			return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, err
+		}
+		servicePort := int32(backend.ServicePort.IntValue())
+		glog.V(1).Infof("Found service %s and it is on %s and port %d", service.Name, service.Spec.ClusterIP, nodePort)
+	
+		// TODO: how?
+		protocol := network.HTTP
+		if servicePort == 443 {
+			protocol = network.HTTPS
+		}
+
+		frontendPortName := fmt.Sprintf("k8s-fep-%d", servicePort)
+		frontendPortID := ac.fepID(gatewayName, frontendPortName)
+
+		httpListenerName := "k8s-defaultbackend-listener"
+		httpListenerID := ac.httpListenerID(gatewayName, httpListenerName)
+	
+		httpSettingsName := "k8s-defaultbackend-settings"
+		httpSettingsID := ac.httpSettingsID(gatewayName, httpSettingsName)
+	
+		requestRoutingRuleName := "k8s-defaultbackend-routingrule"
+		
+		frontendPorts = appendIfNeeded(frontendPorts, network.ApplicationGatewayFrontendPort{
 			Name: &frontendPortName,
 			ApplicationGatewayFrontendPortPropertiesFormat: &network.ApplicationGatewayFrontendPortPropertiesFormat{
 				Port: &servicePort, // presumably
@@ -319,6 +304,104 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		})
 	}
 
+	index := 0
+	for _, rule := range rules {
+		//host := rule.Host  // TODO: what to do with this?  Feel like it should turn into a FIPC perhaps?
+		http := rule.HTTP
+		for _, pathSpec := range http.Paths {
+			urlPath := pathSpec.Path
+			backend := pathSpec.Backend
+
+			// TODO: this is copy-paste from single service backend
+			service, err := serviceResolver(backend.ServiceName)
+			if err != nil {
+				glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
+				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
+			}
+			_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
+			if err != nil {
+				glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
+				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, err
+			}
+			servicePort := int32(backend.ServicePort.IntValue())
+			glog.V(1).Infof("Found service %s and it is on %s and port %d", service.Name, service.Spec.ClusterIP, nodePort)
+		
+			// TODO: how?
+			protocol := network.HTTP
+			if servicePort == 443 {
+				protocol = network.HTTPS
+			}
+			// TODO: end of copy-paste
+
+			frontendPortName := fmt.Sprintf("k8s-fep-%d", servicePort)
+			frontendPortID := ac.fepID(gatewayName, frontendPortName)
+
+			httpListenerName := fmt.Sprintf("k8s-backend%d-listener", index)
+			httpListenerID := ac.httpListenerID(gatewayName, httpListenerName)
+		
+			httpSettingsName := fmt.Sprintf("k8s-backend%d-settings", index)
+			httpSettingsID := ac.httpSettingsID(gatewayName, httpSettingsName)
+
+			urlPathMapName := fmt.Sprintf("k8s-backend%d-pathmap", index)
+			urlPathMapID := ac.urlPathMapID(gatewayName, urlPathMapName)
+		
+			pathRuleName := fmt.Sprintf("k8s-backend%d-pathrule", index)
+			requestRoutingRuleName := fmt.Sprintf("k8s-backend%d-routingrule", index)
+		
+			frontendPorts = appendIfNeeded(frontendPorts, network.ApplicationGatewayFrontendPort{
+				Name: &frontendPortName,
+				ApplicationGatewayFrontendPortPropertiesFormat: &network.ApplicationGatewayFrontendPortPropertiesFormat{
+					Port: &servicePort, // presumably
+				},
+			})
+			backendHTTPSettingsCollection = append(backendHTTPSettingsCollection, network.ApplicationGatewayBackendHTTPSettings{
+				Name: &httpSettingsName,
+				ApplicationGatewayBackendHTTPSettingsPropertiesFormat: &network.ApplicationGatewayBackendHTTPSettingsPropertiesFormat{
+					Protocol: protocol,
+					Port:     &nodePort,
+				},
+			})
+			httpListeners = append(httpListeners, network.ApplicationGatewayHTTPListener{
+				Name: &httpListenerName,
+				ApplicationGatewayHTTPListenerPropertiesFormat: &network.ApplicationGatewayHTTPListenerPropertiesFormat{
+					FrontendIPConfiguration: resourceRef(frontendIPConfigurationID),
+					FrontendPort:            resourceRef(frontendPortID),
+					Protocol:                protocol,
+				},
+			})
+			urlPathMaps = append(urlPathMaps, network.ApplicationGatewayURLPathMap{
+				Name: &urlPathMapName,
+				ApplicationGatewayURLPathMapPropertiesFormat: &network.ApplicationGatewayURLPathMapPropertiesFormat{
+					DefaultBackendAddressPool: resourceRef(backendPoolID),
+					DefaultBackendHTTPSettings: resourceRef(httpSettingsID),
+					PathRules: &[]network.ApplicationGatewayPathRule{
+						network.ApplicationGatewayPathRule{
+							Name: &pathRuleName,
+							ApplicationGatewayPathRulePropertiesFormat: &network.ApplicationGatewayPathRulePropertiesFormat{
+								Paths: &[]string { urlPath },
+								BackendAddressPool: resourceRef(backendPoolID),
+								BackendHTTPSettings: resourceRef(httpSettingsID),
+							},
+						},
+					},
+				},
+			})
+			requestRoutingRules = append(requestRoutingRules, network.ApplicationGatewayRequestRoutingRule{
+				Name: &requestRoutingRuleName,
+				ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
+					RuleType:            network.Basic,
+					BackendAddressPool:  resourceRef(backendPoolID),
+					BackendHTTPSettings: resourceRef(httpSettingsID),
+					HTTPListener:        resourceRef(httpListenerID),
+					URLPathMap:          resourceRef(urlPathMapID),
+					//RedirectConfiguration: &id,
+				},
+			})
+
+			index = index + 1
+		}
+	}
+
 	gw := network.ApplicationGateway{
 		Name:     &gatewayName,
 		Location: &ac.location,
@@ -328,7 +411,14 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 				Name:     network.StandardMedium,
 				Tier:     network.Standard,
 			},
-			FrontendIPConfigurations: &frontendIPConfigurations,
+			FrontendIPConfigurations: &[]network.ApplicationGatewayFrontendIPConfiguration{
+				network.ApplicationGatewayFrontendIPConfiguration{
+					Name: &frontendIPConfigurationName,
+					ApplicationGatewayFrontendIPConfigurationPropertiesFormat: &network.ApplicationGatewayFrontendIPConfigurationPropertiesFormat{
+						PublicIPAddress: resourceRef(publicIPID),
+					},
+				},
+			},
 			GatewayIPConfigurations: &[]network.ApplicationGatewayIPConfiguration{
 				network.ApplicationGatewayIPConfiguration{
 					Name: &gatewayIPConfigurationName,
@@ -346,6 +436,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			},
 			BackendHTTPSettingsCollection: &backendHTTPSettingsCollection,
 			HTTPListeners: &httpListeners,
+			URLPathMaps: &urlPathMaps,
 			RequestRoutingRules: &requestRoutingRules,
 		},
 	}
@@ -393,6 +484,10 @@ func (ac azureContext) httpSettingsID(gatewayName string, settingsName string) s
 	return ac.gatewayResourceID(gatewayName, "backendHttpSettingsCollection", settingsName)
 }
 
+func (ac azureContext) urlPathMapID(gatewayName string, urlPathMapName string) string {
+	return ac.gatewayResourceID(gatewayName, "urlPathMaps", urlPathMapName)
+}
+
 func (ac azureContext) httpListenerID(gatewayName string, listenerName string) string {
 	return ac.gatewayResourceID(gatewayName, "httpListeners", listenerName)
 }
@@ -408,4 +503,13 @@ func (ac azureContext) publicIPID(publicIPName string) string {
 
 func resourceRef(id string) *network.SubResource {
 	return &network.SubResource{ID: to.StringPtr(id)}
+}
+
+func appendIfNeeded(existing []network.ApplicationGatewayFrontendPort, new network.ApplicationGatewayFrontendPort) []network.ApplicationGatewayFrontendPort {
+	for _, p := range existing {
+		if strings.EqualFold(*p.Name, *new.Name) {
+			return existing
+		}
+	}
+	return append(existing, new)
 }
