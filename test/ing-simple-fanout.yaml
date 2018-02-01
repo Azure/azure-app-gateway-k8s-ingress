@@ -2,8 +2,6 @@ apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
   name: simple-fanout
-  annotations:
-    ingress.kubernetes.io/rewrite-target: /
 spec:
   rules:
   - host: fanout.test

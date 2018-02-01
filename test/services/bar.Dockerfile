@@ -1,2 +1,2 @@
 FROM nginx
-COPY barhtml /usr/share/nginx/html
+COPY barhtml /usr/share/nginx/html/bar
