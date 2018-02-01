@@ -18,7 +18,9 @@ func (lbc *LoadBalancerController) putPublicIP(publicIP network.PublicIPAddress)
 
 	rsrc := <-rsrcch
 
-	glog.V(1).Infof("created or updated %s with IP addr %s", safe(rsrc.Name), safe(rsrc.IPAddress))
+	rsrcName := safe(rsrc.Name)  // we have been getting intermittent NPEs in the logging, so break out the null-guard operations to find out what's going on
+	rsrcIPAddress := safe(rsrc.IPAddress)
+	glog.V(1).Infof("created or updated %s with IP addr %s", rsrcName, rsrcIPAddress)
 
 	return &rsrc, nil
 }

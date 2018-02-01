@@ -1,7 +1,7 @@
 apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
-  name: simple-fanout
+  name: simple-fanout-with-404
 spec:
   rules:
   - host: fanout.test
@@ -15,3 +15,6 @@ spec:
         backend:
           serviceName: nginx-bar
           servicePort: 80
+  backend:
+    serviceName: nginx
+    servicePort: 80
