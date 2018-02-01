@@ -249,38 +249,15 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		ApplicationGatewayURLPathMapPropertiesFormat: &network.ApplicationGatewayURLPathMapPropertiesFormat{
 			DefaultBackendAddressPool: resourceRef(backendPoolID),
 			DefaultBackendHTTPSettings: resourceRef(defHTTPSettingsID),
-		// 	PathRules: &[]network.ApplicationGatewayPathRule{
-		// 		network.ApplicationGatewayPathRule{
-		// 			Name: &pathRuleName,
-		// 			ApplicationGatewayPathRulePropertiesFormat: &network.ApplicationGatewayPathRulePropertiesFormat{
-		// 				Paths: &[]string { urlPath },
-		// 				BackendAddressPool: resourceRef(backendPoolID),
-		// 				BackendHTTPSettings: resourceRef(httpSettingsID),
-		// 			},
-		// 		},
-		// 	},
 		},
 	}
 	pathRules := []network.ApplicationGatewayPathRule{}
 
 	if backend != nil {
-		service, err := serviceResolver(backend.ServiceName)
+		servicePort, nodePort, protocol, err := serviceInfo(*backend, serviceResolver)
+
 		if err != nil {
-			glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
 			return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
-		}
-		_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
-		if err != nil {
-			glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
-			return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, err
-		}
-		servicePort := int32(backend.ServicePort.IntValue())
-		glog.V(1).Infof("Found service %s and it is on %s and port %d", service.Name, service.Spec.ClusterIP, nodePort)
-	
-		// TODO: how?
-		protocol := network.HTTP
-		if servicePort == 443 {
-			protocol = network.HTTPS
 		}
 
 		servicePorts[servicePort] = servicePort
@@ -311,29 +288,18 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			urlPath := pathSpec.Path
 			backend := pathSpec.Backend
 
-			// TODO: this is copy-paste from single service backend
-			service, err := serviceResolver(backend.ServiceName)
+			servicePort, nodePort, protocol, err := serviceInfo(backend, serviceResolver)
+
 			if err != nil {
-				glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
 				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
 			}
-			_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
-			if err != nil {
-				glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
-				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, err
-			}
-			servicePort := int32(backend.ServicePort.IntValue())
-			glog.V(1).Infof("Found service %s and it is on %s and port %d", service.Name, service.Spec.ClusterIP, nodePort)
-		
-			// TODO: how?
-			protocol := network.HTTP
-			if servicePort == 443 {
-				protocol = network.HTTPS
-			}
-
+	
 			servicePorts[servicePort] = servicePort
-			// TODO: end of copy-paste
-
+	
+			if err != nil {
+				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
+			}
+	
 			httpSettingsName := fmt.Sprintf("k8s-backend%d-settings", index)
 			httpSettingsID := ac.httpSettingsID(gatewayName, httpSettingsName)
 
@@ -370,11 +336,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	
 		requestRoutingRuleName := fmt.Sprintf("k8s-routingrule-%d", servicePort)
 
-		// TODO: how?
-		protocol := network.HTTP
-		if servicePort == 443 {
-			protocol = network.HTTPS
-		}
+		protocol := protocol(servicePort)
 
 		frontendPorts = append(frontendPorts, network.ApplicationGatewayFrontendPort{
 			Name: &frontendPortName,
@@ -392,17 +354,29 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			},
 		})
 
+		routingURLPathMapRef := resourceRef(urlPathMapID)
+		routingRuleType := network.PathBasedRouting
+		if len(pathRules) == 0 {
+			routingURLPathMapRef = nil
+			routingRuleType = network.Basic
+		}
+
 		requestRoutingRules = append(requestRoutingRules, network.ApplicationGatewayRequestRoutingRule{
 			Name: &requestRoutingRuleName,
 			ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
-				RuleType:            network.PathBasedRouting,
+				RuleType:            routingRuleType,
 				BackendAddressPool:  resourceRef(backendPoolID),
 				BackendHTTPSettings: resourceRef(defHTTPSettingsID),
 				HTTPListener:        resourceRef(httpListenerID),
-				URLPathMap:          resourceRef(urlPathMapID),
+				URLPathMap:          routingURLPathMapRef,
 				//RedirectConfiguration: &id,
 			},
 		})
+	}
+
+	gatewayURLPathMaps := &[]network.ApplicationGatewayURLPathMap{ urlPathMap }
+	if len(pathRules) == 0 {
+		gatewayURLPathMaps = nil
 	}
 
 	gw := network.ApplicationGateway{
@@ -439,7 +413,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			},
 			BackendHTTPSettingsCollection: &backendHTTPSettingsCollection,
 			HTTPListeners: &httpListeners,
-			URLPathMaps: &[]network.ApplicationGatewayURLPathMap{ urlPathMap },
+			URLPathMaps: gatewayURLPathMaps,
 			RequestRoutingRules: &requestRoutingRules,
 		},
 	}
@@ -447,11 +421,36 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	return gw, publicIP, gatewaySubnet, nil
 }
 
+func serviceInfo(backend v1beta1.IngressBackend, serviceResolver func(string) (*v1.Service, error)) (int32, int32, network.ApplicationGatewayProtocol, error) {
+	service, err := serviceResolver(backend.ServiceName)
+	if err != nil {
+		glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
+		return 0, 0, network.HTTP, err
+	}
+	_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
+	if err != nil {
+		glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
+		return 0, 0, network.HTTP, err
+	}
+	servicePort := int32(backend.ServicePort.IntValue())
+	glog.V(1).Infof("Found service %s and it is on %s and port %d", service.Name, service.Spec.ClusterIP, nodePort)
+
+	protocol := protocol(servicePort)
+
+	return servicePort, nodePort, protocol, nil
+}
+
+func protocol(servicePort int32) network.ApplicationGatewayProtocol {
+	// TODO: how?
+	if servicePort == 443 {
+		return network.HTTPS
+	}
+	return network.HTTP
+}
+
 func nicIPConfigs(ipcids []string) []network.InterfaceIPConfiguration {
 	ipconfigs := []network.InterfaceIPConfiguration{}
 	for _, ipcid := range ipcids {
-		//id := ac.resourceID("Microsoft.Network", "networkInterfaces", ".../ipConfigurations/ipConfig1")
-		// ipcidc := ipcid
 		ipconfigid := ipcid
 		ipconfig := network.InterfaceIPConfiguration{
 			ID: &ipconfigid,
