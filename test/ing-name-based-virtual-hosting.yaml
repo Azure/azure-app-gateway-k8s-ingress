@@ -1,20 +1,18 @@
 apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
-  name: simple-fanout-with-404
+  name: name-based-virtual-hosting
 spec:
   rules:
-  - host: fanout404.test
+  - host: nbvh-foo.test
     http:
       paths:
-      - path: /foo/*
-        backend:
+      - backend:
           serviceName: nginx-foo
           servicePort: 80
-      - path: /bar/*
-        backend:
+  - host: nbvh-bar.test
+    http:
+      paths:
+      - backend:
           serviceName: nginx-bar
           servicePort: 80
-  backend:
-    serviceName: nginx
-    servicePort: 80

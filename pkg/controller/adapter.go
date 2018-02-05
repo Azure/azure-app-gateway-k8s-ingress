@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/arm/network"
 	"github.com/Azure/go-autorest/autorest/to"
@@ -53,11 +54,19 @@ func getGatewayName(ingress v1beta1.Ingress) (string, string) {
 	return gatewayName, publicIPName
 }
 
+type listenerPort struct {
+	port int32
+	hostName string
+}
+
+func listenerSuffix(listener listenerPort) string {
+	if listener.hostName != "" {
+		return fmt.Sprintf("%d-%s", listener.port, strings.Replace(listener.hostName, ".", "-", -1))  // TODO: this probably isn't good enough long term, but will do for POC
+	}
+	return fmt.Sprintf("%d", listener.port)
+}
+
 func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver func(string) (*v1.Service, error), backendIPCIDs []string) (network.ApplicationGateway, network.PublicIPAddress, network.Subnet, error) {
-	//backend := ingress.Spec.Backend // default backend service: ServiceName, ServicePort
-	//// ^^ how do we map this to a backend pool
-	//tlses := ingress.Spec.TLS   // each: Hosts ([]string]), SecretName (the id of a k8s Secret resource)
-	//rules := ingress.Spec.Rules // each: Host, Paths ([]{Path,Backend={ServiceName, ServicePort}})
 
 	// SIMPLEST CASE: SINGLE SERVICE INGRESS
 	/*
@@ -242,7 +251,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	backendHTTPSettingsCollection := []network.ApplicationGatewayBackendHTTPSettings{}
 	httpListeners := []network.ApplicationGatewayHTTPListener{}
 	requestRoutingRules := []network.ApplicationGatewayRequestRoutingRule{}
-	servicePorts := make(map[int32]int32)
+	servicePorts := make(map[listenerPort]listenerPort)
 
 	urlPathMap := network.ApplicationGatewayURLPathMap{
 		Name: &urlPathMapName,
@@ -260,7 +269,8 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
 		}
 
-		servicePorts[servicePort] = servicePort
+		listener := listenerPort{port: servicePort, hostName: ""}
+		servicePorts[listener] = listener
 
 		backendHTTPSettingsCollection = append(backendHTTPSettingsCollection, network.ApplicationGatewayBackendHTTPSettings{
 			Name: &defHTTPSettingsName,
@@ -282,7 +292,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 
 	index := 0
 	for _, rule := range rules {
-		//host := rule.Host  // TODO: what to do with this?  Feel like it should turn into a FIPC perhaps?
+		host := rule.Host
 		http := rule.HTTP
 		for _, pathSpec := range http.Paths {
 			urlPath := pathSpec.Path
@@ -293,8 +303,9 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			if err != nil {
 				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
 			}
-	
-			servicePorts[servicePort] = servicePort
+
+			listener := listenerPort{port: servicePort, hostName: host}
+			servicePorts[listener] = listener
 	
 			if err != nil {
 				return network.ApplicationGateway{}, network.PublicIPAddress{}, network.Subnet{}, fmt.Errorf("Failed to resolve service %s: %v", backend.ServiceName, err)
@@ -303,8 +314,6 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			httpSettingsName := fmt.Sprintf("k8s-backend%d-settings", index)
 			httpSettingsID := ac.httpSettingsID(gatewayName, httpSettingsName)
 
-			pathRuleName := fmt.Sprintf("k8s-backend%d-pathrule", index)
-
 			backendHTTPSettingsCollection = append(backendHTTPSettingsCollection, network.ApplicationGatewayBackendHTTPSettings{
 				Name: &httpSettingsName,
 				ApplicationGatewayBackendHTTPSettingsPropertiesFormat: &network.ApplicationGatewayBackendHTTPSettingsPropertiesFormat{
@@ -312,14 +321,19 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 					Port:     &nodePort,
 				},
 			})
-			pathRules = append(pathRules, network.ApplicationGatewayPathRule{
-				Name: &pathRuleName,
-				ApplicationGatewayPathRulePropertiesFormat: &network.ApplicationGatewayPathRulePropertiesFormat{
-					Paths: &[]string { urlPath },
-					BackendAddressPool: resourceRef(backendPoolID),
-					BackendHTTPSettings: resourceRef(httpSettingsID),
-				},
-			})
+
+			if urlPath != "" {
+				pathRuleName := fmt.Sprintf("k8s-backend%d-pathrule", index)
+
+				pathRules = append(pathRules, network.ApplicationGatewayPathRule{
+					Name: &pathRuleName,
+					ApplicationGatewayPathRulePropertiesFormat: &network.ApplicationGatewayPathRulePropertiesFormat{
+						Paths: &[]string { urlPath },
+						BackendAddressPool: resourceRef(backendPoolID),
+						BackendHTTPSettings: resourceRef(httpSettingsID),
+					},
+				})
+			}
 
 			index = index + 1
 		}
@@ -328,29 +342,36 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	urlPathMap.PathRules = &pathRules
 
 	for servicePort := range servicePorts {
-		frontendPortName := fmt.Sprintf("k8s-fep-%d", servicePort)
+		frontendPortName := fmt.Sprintf("k8s-fep-%d", servicePort.port)
 		frontendPortID := ac.fepID(gatewayName, frontendPortName)
 
-		httpListenerName := fmt.Sprintf("k8s-listener-%d", servicePort)
+		httpListenerName := fmt.Sprintf("k8s-listener-%s", listenerSuffix(servicePort))
 		httpListenerID := ac.httpListenerID(gatewayName, httpListenerName)
+
+		hostName_ := servicePort.hostName  // need to do the dance because address of range variable will always point to same value
+		hostName := &hostName_
+		if servicePort.hostName == "" {
+			hostName = nil
+		}
 	
-		requestRoutingRuleName := fmt.Sprintf("k8s-routingrule-%d", servicePort)
+		requestRoutingRuleName := fmt.Sprintf("k8s-routingrule-%s", listenerSuffix(servicePort))
 
-		protocol := protocol(servicePort)
+		protocol := protocol(servicePort.port)
 
-		frontendPorts = append(frontendPorts, network.ApplicationGatewayFrontendPort{
+		frontendPorts = appendIfNeeded(frontendPorts, network.ApplicationGatewayFrontendPort{
 			Name: &frontendPortName,
 			ApplicationGatewayFrontendPortPropertiesFormat: &network.ApplicationGatewayFrontendPortPropertiesFormat{
-				Port: &servicePort, // presumably
+				Port: &servicePort.port, // presumably
 			},
 		})
 
 		httpListeners = append(httpListeners, network.ApplicationGatewayHTTPListener{
 			Name: &httpListenerName,
 			ApplicationGatewayHTTPListenerPropertiesFormat: &network.ApplicationGatewayHTTPListenerPropertiesFormat{
-				FrontendIPConfiguration: resourceRef(frontendIPConfigurationID),
-				FrontendPort:            resourceRef(frontendPortID),
-				Protocol:                protocol,
+				FrontendIPConfiguration:     resourceRef(frontendIPConfigurationID),
+				FrontendPort:                resourceRef(frontendPortID),
+				Protocol:                    protocol,
+				HostName:                    hostName,
 			},
 		})
 
@@ -361,6 +382,10 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			routingRuleType = network.Basic
 		}
 
+		// TODO: We are ending up using the wrong HTTP Settings in the case
+		// where there is a path with no 'path' element (as in the NBVH case) -
+		// we find ourselves using k8s-defaultbackend-settings when it should
+		// be k8s-backend{n}-settings
 		requestRoutingRules = append(requestRoutingRules, network.ApplicationGatewayRequestRoutingRule{
 			Name: &requestRoutingRuleName,
 			ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
@@ -505,4 +530,13 @@ func (ac azureContext) publicIPID(publicIPName string) string {
 
 func resourceRef(id string) *network.SubResource {
 	return &network.SubResource{ID: to.StringPtr(id)}
+}
+
+func appendIfNeeded(existing []network.ApplicationGatewayFrontendPort, new network.ApplicationGatewayFrontendPort) []network.ApplicationGatewayFrontendPort {
+	for _, p := range existing {
+		if strings.EqualFold(*p.Name, *new.Name) {
+			return existing
+		}
+	}
+	return append(existing, new)
 }
