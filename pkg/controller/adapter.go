@@ -291,6 +291,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	}
 
 	index := 0
+	backendHTTPSettingsForEntryPoint := make(map[listenerPort]string)
 	for _, rule := range rules {
 		host := rule.Host
 		http := rule.HTTP
@@ -322,6 +323,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 				},
 			})
 
+			// TODO: can you have a blank path and specific paths within the same host?
 			if urlPath != "" {
 				pathRuleName := fmt.Sprintf("k8s-backend%d-pathrule", index)
 
@@ -333,6 +335,8 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 						BackendHTTPSettings: resourceRef(httpSettingsID),
 					},
 				})
+			} else {
+				backendHTTPSettingsForEntryPoint[listener] = httpSettingsID
 			}
 
 			index = index + 1
@@ -382,6 +386,11 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			routingRuleType = network.Basic
 		}
 
+		routingRuleBackendHTTPSettingsID := defHTTPSettingsID
+		if s, ok := backendHTTPSettingsForEntryPoint[servicePort]; ok {
+			routingRuleBackendHTTPSettingsID = s
+		}
+
 		// TODO: We are ending up using the wrong HTTP Settings in the case
 		// where there is a path with no 'path' element (as in the NBVH case) -
 		// we find ourselves using k8s-defaultbackend-settings when it should
@@ -391,7 +400,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
 				RuleType:            routingRuleType,
 				BackendAddressPool:  resourceRef(backendPoolID),
-				BackendHTTPSettings: resourceRef(defHTTPSettingsID),
+				BackendHTTPSettings: resourceRef(routingRuleBackendHTTPSettingsID),
 				HTTPListener:        resourceRef(httpListenerID),
 				URLPathMap:          routingURLPathMapRef,
 				//RedirectConfiguration: &id,
