@@ -22,9 +22,9 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
 	"github.com/Azure/azure-sdk-for-go/arm/resources/resources"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
-	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
 	"github.com/golang/glog"
 
 	"k8s.io/api/core/v1"
@@ -95,6 +95,31 @@ func (lbc *LoadBalancerController) defaultLocation() (string, error) {
 	return *g.Location, nil
 }
 
+func (lbc *LoadBalancerController) reportIngressErrorEvent(i v1beta1.Ingress, code string, message string) error {
+	errorEvent := v1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "azl7icing",
+		},
+		InvolvedObject: v1.ObjectReference{
+			Kind:      "Ingress",
+			Namespace: i.Namespace,
+			Name:      i.Name,
+			UID:       i.UID,
+		},
+		Reason:  code,
+		Message: message,
+		Source: v1.EventSource{
+			Component: "azl7ic",
+		},
+		Type:           "Warning",
+		Count:          1,
+		FirstTimestamp: metav1.Now(),
+		LastTimestamp:  metav1.Now(),
+	}
+	_, err := lbc.client.CoreV1().Events("default").Create(&errorEvent)
+	return err
+}
+
 func (lbc *LoadBalancerController) setIngressGateway(i *v1beta1.Ingress) {
 	currIng, err := lbc.client.Extensions().Ingresses(i.Namespace).Get(i.Name, metav1.GetOptions{})
 	if err != nil {
@@ -122,6 +147,10 @@ func (lbc *LoadBalancerController) setIngressGateway(i *v1beta1.Ingress) {
 	desiredLBState, publicIP, subnet, err := getGatewaySpec(*currIng, lbc.azureAuth.SubscriptionID, lbc.azureConfig, location, serviceResolver, ipcids)
 	if err != nil {
 		glog.V(1).Infof("Error deriving desired gateway spec: %v", err)
+		err = lbc.reportIngressErrorEvent(*currIng, "ErrorDerivingSpec", fmt.Sprintf("Error deriving desired gateway spec: %v", err))
+		if err != nil {
+			glog.V(1).Infof("Error recording ErrorDerivingSpec event: %v", err)
+		}
 		return
 	}
 
