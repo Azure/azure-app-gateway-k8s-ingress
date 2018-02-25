@@ -68,10 +68,7 @@ func (ctx *ControllerContext) Start() {
 	}
 }
 
-type e struct{}
-
 // Stop stops all informers in the context
 func (ctx *ControllerContext) Stop() {
-	s := e{}
-	ctx.StopChannel <- s
+	ctx.StopChannel <- struct{}{}
 }
