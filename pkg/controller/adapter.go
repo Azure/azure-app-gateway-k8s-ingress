@@ -352,10 +352,9 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		httpListenerName := fmt.Sprintf("k8s-listener-%s", listenerSuffix(servicePort))
 		httpListenerID := ac.httpListenerID(gatewayName, httpListenerName)
 
-		hostName := servicePort.hostName // need to do the dance because address of range variable will always point to same value
-		hostNamePtr := &hostName
+		hostName := to.StringPtr(servicePort.hostName)  // don't use &servicePort.hostName because range variable reuses address
 		if servicePort.hostName == "" {
-			hostNamePtr = nil
+			hostName = nil
 		}
 
 		requestRoutingRuleName := fmt.Sprintf("k8s-routingrule-%s", listenerSuffix(servicePort))
@@ -365,7 +364,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 		frontendPorts = appendIfNeeded(frontendPorts, network.ApplicationGatewayFrontendPort{
 			Name: &frontendPortName,
 			ApplicationGatewayFrontendPortPropertiesFormat: &network.ApplicationGatewayFrontendPortPropertiesFormat{
-				Port: &servicePort.port, // presumably
+				Port: to.Int32Ptr(servicePort.port), // presumably
 			},
 		})
 
@@ -375,7 +374,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 				FrontendIPConfiguration: resourceRef(frontendIPConfigurationID),
 				FrontendPort:            resourceRef(frontendPortID),
 				Protocol:                protocol,
-				HostName:                hostNamePtr,
+				HostName:                hostName,
 			},
 		})
 
@@ -457,7 +456,7 @@ func serviceInfo(backend v1beta1.IngressBackend, serviceResolver func(string) (*
 		glog.V(1).Infof("Failed to resolve service %s: %v", backend.ServiceName, err)
 		return 0, 0, network.HTTP, err
 	}
-	_, nodePort, err := utils.GetNodePort(service) // TODO: this depends on the service being created with --type=NodePort - this is undesirable
+	_, nodePort, err := utils.GetNodePort(service)
 	if err != nil {
 		glog.V(1).Infof("Failed to get node port for service %s: %v", service.Name, err)
 		return 0, 0, network.HTTP, err
