@@ -391,10 +391,6 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 			routingRuleBackendHTTPSettingsID = s
 		}
 
-		// TODO: We are ending up using the wrong HTTP Settings in the case
-		// where there is a path with no 'path' element (as in the NBVH case) -
-		// we find ourselves using k8s-defaultbackend-settings when it should
-		// be k8s-backend{n}-settings
 		requestRoutingRules = append(requestRoutingRules, network.ApplicationGatewayRequestRoutingRule{
 			Name: &requestRoutingRuleName,
 			ApplicationGatewayRequestRoutingRulePropertiesFormat: &network.ApplicationGatewayRequestRoutingRulePropertiesFormat{
