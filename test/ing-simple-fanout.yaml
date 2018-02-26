@@ -2,6 +2,8 @@ apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
   name: simple-fanout
+  annotations:
+    kubernetes.io/ingress.class: azure-application-gateway
 spec:
   rules:
   - host: fanout.test

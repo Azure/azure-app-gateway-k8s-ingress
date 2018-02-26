@@ -104,7 +104,7 @@ func (lbc *LoadBalancerController) primaryIPConfigID(nodeName string) (string, e
 	client.Authorizer = lbc.azureAuth
 
 	var machine compute.VirtualMachine
-	vmName := nodeName //mapNodeNameToVMName(nodeName)
+	vmName := nodeName
 	machine, err := client.Get(lbc.resourceGroup(), vmName, "")
 	if err != nil {
 		glog.V(2).Infof("get VM error %s %v", vmName, err)

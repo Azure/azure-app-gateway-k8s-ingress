@@ -15,8 +15,7 @@ import (
 
 const (
 	// ingressClassKey picks a specific "class" for the Ingress. The controller
-	// only processes Ingresses with this annotation either unset, or set
-	// to either gceIngessClass or the empty string.
+	// only processes Ingresses with this annotation set to the given value.
 	ingressClassKey        = "kubernetes.io/ingress.class"
 	appGatewayIngressClass = "azure-application-gateway"
 )
@@ -28,17 +27,17 @@ type azureContext struct {
 	location       string
 }
 
-func isAppGatewayIngress(ingress v1beta1.Ingress) bool {
-	// defaulting to app gateway is modelled on GCE ingress controller;
-	// assuming it makes sense because you wouldn't install multiple
-	// ingress controllers?
+func isAppGatewayIngress(ingress *v1beta1.Ingress) bool {
+	if ingress == nil {
+		return false
+	}
 	if l, ok := ingress.Annotations[ingressClassKey]; ok {
-		return l == "" || l == appGatewayIngressClass
+		return l == appGatewayIngressClass
 	}
 	return true
 }
 
-func getGatewaySpec(ingress v1beta1.Ingress, subscriptionID string, azureConfig context.AzureConfig, location string, serviceResolver func(string) (*v1.Service, error), backendIPCIDs []string) (network.ApplicationGateway, network.PublicIPAddress, network.Subnet, error) {
+func getGatewayResourceSpecs(ingress v1beta1.Ingress, subscriptionID string, azureConfig context.AzureConfig, location string, serviceResolver func(string) (*v1.Service, error), backendIPCIDs []string) (network.ApplicationGateway, network.PublicIPAddress, network.Subnet, error) {
 	ac := azureContext{
 		subscriptionID: subscriptionID,
 		resourceGroup:  azureConfig.ResourceGroup,
@@ -48,7 +47,7 @@ func getGatewaySpec(ingress v1beta1.Ingress, subscriptionID string, azureConfig 
 	return ac.ingressToGateway(ingress, serviceResolver, backendIPCIDs)
 }
 
-func getGatewayName(ingress v1beta1.Ingress) (string, string) {
+func getGatewayResourceNames(ingress v1beta1.Ingress) (string, string) {
 	gatewayName := "k8s-aaging-" + ingress.Name
 	publicIPName := gatewayName + "-public-ip"
 	return gatewayName, publicIPName
@@ -209,7 +208,7 @@ func (ac azureContext) ingressToGateway(ingress v1beta1.Ingress, serviceResolver
 	backend := ingress.Spec.Backend
 	rules := ingress.Spec.Rules
 
-	gatewayName, publicIPName := getGatewayName(ingress)
+	gatewayName, publicIPName := getGatewayResourceNames(ingress)
 
 	gatewayIPConfigurationName := "k8sgatewayipcfg"
 
