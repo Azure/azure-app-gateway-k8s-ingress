@@ -101,7 +101,8 @@ Things that I know are missing/wrong at the code/dev level:
 * Core gateway spec algorithm needs to be made easier to reason about (simplify, improve
   readability, tests!).
 * No design documentation.
-* Probably lots of gaps in the README!  *grin*
+* Continuous integration / testing (including PR validation).
+* Probably lots of gaps in the README and contributor documentation!  *grin*
 
 **TODO:** Create GitHub issues for all of these.
 
