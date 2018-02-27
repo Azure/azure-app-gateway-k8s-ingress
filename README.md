@@ -73,6 +73,36 @@ or you can use your own.
 sufficient, and you don't want LoadBalancer because that will create an Azure load balancer.
 `./test/services/commands.txt` gives examples of service exposure commands.
 
+# Routing Behaviour
+
+The Azure Application Gateway doesn't yet support URL rewriting.  This can lead to possibly
+unexpected / undesired behaviour on ingress.  For example consider the following fanout:
+
+```
+- path: /foo/*
+  backend:
+    serviceName: nginx-foo
+    servicePort: 80
+- path: /bar/*
+  backend:
+    serviceName: nginx-bar
+    servicePort: 80
+```
+
+Suppose a request is directed to `fanout.test/foo/index.html`.  Then the `nginx-foo` service
+will receive a request for `/foo/index.html`, *not* `index.html`.  Your test services will
+need to be configured accordingly.  (The services in `./test/services` are set up in this way,
+which leads to some infelicities in the name-based virtual hosting scenario - e.g. you have to
+access `nbvh-foo.test/foo/index.html` instead of `nbvh-foo.test/index.html`.)
+
+There's no specification for the behaviour of ingresses so it's not possible to say this
+is a bug or a blocker - it seems like it's legal for an ingress to behave this way.  But it
+might be surprising, and might limit its usefulness as every service implementation needs
+to be aware of where it will be 'mounted' in the load balancer URL tree.
+
+**TODO:** Raise a GitHub issue for this, and work with load balancer team to see if there is
+a way around it.
+
 # Current Status
 
 This is pretty much proof of concept at the moment, and bears the scars of a _lot_ of trial and
@@ -84,6 +114,7 @@ know are missing/wrong at the functional level:
 * No fine control of app gateway settings (e.g. size).
 * No handling of scale up/down (haven't been able to progress this because of an [ACS issue](https://github.com/Azure/acs-engine/issues/2063)).
 * No handling of service changes/deletion.
+* Routing behaviour noted above.
 
 Things that I know are missing/wrong at the operational level:
 
