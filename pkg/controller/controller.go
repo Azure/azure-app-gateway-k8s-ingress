@@ -1,19 +1,3 @@
-/*
-Copyright 2017 The Kubernetes Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
@@ -22,9 +6,9 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
 	"github.com/Azure/azure-sdk-for-go/arm/resources/resources"
 	"github.com/Azure/go-autorest/autorest/azure/auth"
-	"github.com/Azure/azure-app-gateway-k8s-ingress/pkg/context"
 	"github.com/golang/glog"
 
 	"k8s.io/api/core/v1"
@@ -95,6 +79,31 @@ func (lbc *LoadBalancerController) defaultLocation() (string, error) {
 	return *g.Location, nil
 }
 
+func (lbc *LoadBalancerController) reportIngressErrorEvent(i v1beta1.Ingress, code string, message string) error {
+	errorEvent := v1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "azl7icing",
+		},
+		InvolvedObject: v1.ObjectReference{
+			Kind:      "Ingress",
+			Namespace: i.Namespace,
+			Name:      i.Name,
+			UID:       i.UID,
+		},
+		Reason:  code,
+		Message: message,
+		Source: v1.EventSource{
+			Component: "azl7ic",
+		},
+		Type:           "Warning",
+		Count:          1,
+		FirstTimestamp: metav1.Now(),
+		LastTimestamp:  metav1.Now(),
+	}
+	_, err := lbc.client.CoreV1().Events("default").Create(&errorEvent)
+	return err
+}
+
 func (lbc *LoadBalancerController) setIngressGateway(i *v1beta1.Ingress) {
 	currIng, err := lbc.client.Extensions().Ingresses(i.Namespace).Get(i.Name, metav1.GetOptions{})
 	if err != nil {
@@ -119,41 +128,45 @@ func (lbc *LoadBalancerController) setIngressGateway(i *v1beta1.Ingress) {
 	}
 
 	// TODO: consider using a resources.Deployment
-	desiredLBState, publicIP, subnet, err := getGatewaySpec(*currIng, lbc.azureAuth.SubscriptionID, lbc.azureConfig, location, serviceResolver, ipcids)
+	desiredGatewayState, desiredPublicIPState, desiredSubnet, err := getGatewayResourceSpecs(*currIng, lbc.azureAuth.SubscriptionID, lbc.azureConfig, location, serviceResolver, ipcids)
 	if err != nil {
-		glog.V(1).Infof("Error deriving desired gateway spec: %v", err)
+		glog.V(1).Infof("Error deriving desired gateway resource states: %v", err)
+		err = lbc.reportIngressErrorEvent(*currIng, "ErrorDerivingSpec", fmt.Sprintf("Error deriving desired gateway spec: %v", err))
+		if err != nil {
+			glog.V(1).Infof("Error recording ErrorDerivingSpec event: %v", err)
+		}
 		return
 	}
 
-	buf, err := json.Marshal(desiredLBState)
+	buf, err := json.Marshal(desiredGatewayState)
 	glog.V(1).Infof("Desired LB state: %s", string(buf))
 
 	// (note: currently subnets get deleted during acs-engine scale up but a fix is in progress)
-	_, err = lbc.putSubnet(lbc.azureConfig.VnetName, subnet)
+	_, err = lbc.putSubnet(lbc.azureConfig.VnetName, desiredSubnet)
 	if err != nil {
 		glog.V(1).Infof("Error committing app gateway subnet %v", err)
 		return
 	}
 
-	ppublicIP, err := lbc.putPublicIP(publicIP)
+	publicIP, err := lbc.putPublicIP(desiredPublicIPState)
 	if err != nil {
 		glog.V(1).Infof("Error committing PIP resource %v", err)
 		return
 	}
 
-	gw, err := lbc.putGateway(desiredLBState)
+	gateway, err := lbc.putGateway(desiredGatewayState)
 	if err != nil {
 		glog.V(1).Infof("Error committing gateway resource: %v", err)
 		return
 	}
 
-	err = lbc.nicUpdate(*(*gw.BackendAddressPools)[0].ID, ipcids)
+	err = lbc.nicUpdate(*(*gateway.BackendAddressPools)[0].ID, ipcids)
 	if err != nil {
 		glog.V(1).Infof("Error setting backend pool on NICs: %v", err)
 		return
 	}
 
-	ip, err := lbc.getPublicIP(*ppublicIP)
+	ip, err := lbc.getPublicIP(*publicIP)
 	if err != nil {
 		glog.V(1).Infof("Error getting ingress public IP: %v", err)
 		return
@@ -181,6 +194,9 @@ func (lbc *LoadBalancerController) setIngressGateway(i *v1beta1.Ingress) {
 // OnNewIngress runs when a new ingress is detected
 // and creates a corresponding load balancer
 func (lbc *LoadBalancerController) OnNewIngress(i *v1beta1.Ingress) {
+	if (!isAppGatewayIngress(i)) {
+		glog.V(1).Infof("Ignoring new ingress %s - not an Azure Application Gateway ingress", i.Name)
+	}
 	glog.V(1).Infof("Processing new ingress %s", i.Name)
 	lbc.setIngressGateway(i)
 }
@@ -190,6 +206,17 @@ func (lbc *LoadBalancerController) OnNewIngress(i *v1beta1.Ingress) {
 func (lbc *LoadBalancerController) OnEditIngress(old, new *v1beta1.Ingress) {
 	// I think this pretty much normalises the AGW to the new state.  So the same
 	// spec-then-PUT should work I think
+
+	isOldAppGateway := isAppGatewayIngress(old)
+	isNewAppGateway := isAppGatewayIngress(new)
+	if (isOldAppGateway && !isNewAppGateway) {
+		glog.V(1).Infof("Ingress %s changed from Azure Application Gateway to other - deleting gateway", old.Name)
+		lbc.deleteIngress(old)
+		return
+	} else if (!isOldAppGateway && !isNewAppGateway) {
+		glog.V(1).Infof("Ignoring updated ingress %s - not an Azure Application Gateway ingress", old.Name)
+		return
+	}
 
 	// If they differ only by status then there is no work to do?
 	// (We still need to check ObjectMeta because of annotations.)
@@ -201,6 +228,13 @@ func (lbc *LoadBalancerController) OnEditIngress(old, new *v1beta1.Ingress) {
 		return
 	}
 
+	// If we get here, it's either:
+	// * a gateway ingress being modified (most likely) - we need to update the existing gateway; or
+	// * a non-gateway ingress (e.g. nginx) being changed to use a gateway - we trust that the
+	//   ingress controller handling the 'from' class will delete anything it needs to, and just
+	//   create a new gateway
+	// It turns out these are the same code path at our end, so no need to distinguish these cases!
+
 	glog.V(1).Infof("Updating ingress %s", old.Name)
 	// TODO: if the name changes we need to tear down the old gateway
 	// TODO: is this allowed in k8s and if so how do we transition in Azure?
@@ -211,7 +245,12 @@ func (lbc *LoadBalancerController) OnEditIngress(old, new *v1beta1.Ingress) {
 // and removes the load balancer
 func (lbc *LoadBalancerController) OnDeleteIngress(i *v1beta1.Ingress) {
 	glog.V(1).Infof("Processing ingress deletion %s", i.Name)
-	lbName, pipName := getGatewayName(*i)
+	lbc.deleteIngress(i)
+	glog.V(1).Infof("Processed ingress deletion %s", i.Name)
+}
+
+func (lbc *LoadBalancerController) deleteIngress(i *v1beta1.Ingress) {
+	lbName, pipName := getGatewayResourceNames(*i)
 	err := lbc.deleteGateway(lbName)
 	if err != nil {
 		glog.V(1).Infof("Failed to delete LB %s for %s", lbName, i.Name)
@@ -222,7 +261,6 @@ func (lbc *LoadBalancerController) OnDeleteIngress(i *v1beta1.Ingress) {
 		glog.V(1).Infof("Failed to delete PIP %s for %s", pipName, i.Name)
 		// TODO: put it back on the queue
 	}
-	glog.V(1).Infof("Processed ingress deletion %s", i.Name)
 }
 
 // OnNewNode - TODO: implementation and documentation

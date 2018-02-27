@@ -1,19 +1,3 @@
-/*
-Copyright 2017 The Kubernetes Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package main
 
 import (
@@ -59,9 +43,6 @@ var (
 
 	resyncPeriod = flags.Duration("sync-period", 2*time.Minute,
 		"Interval at which to re-list and confirm cloud resources.")
-
-	// defaultBackendService = flags.String("default-backend-service", "kube-system/default-http-backend",
-	// 	"Backend service when path is not routed, in the form namespace/name. Should serve a 404 page.")
 )
 
 var (
@@ -159,7 +140,7 @@ func kubeClient() kubernetes.Interface {
 
 	kubeClient, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		glog.Fatalf("failed to create client: %v", err)
+		glog.Fatalf("Failed to create client: %v", err)
 	}
 
 	return kubeClient
@@ -169,7 +150,7 @@ func getKubeClientConfig() *rest.Config {
 	if *inCluster {
 		config, err := rest.InClusterConfig()
 		if err != nil {
-			glog.Fatalf("error creating client configuration: %v", err)
+			glog.Fatalf("Error creating client configuration: %v", err)
 		}
 		return config
 	}
@@ -197,18 +178,21 @@ func azAuthFromConfigMap(kubeclient kubernetes.Interface, mapName string) auth.C
 	// map a configmap into filespace.
 	cm, err := kubeclient.CoreV1().ConfigMaps("default").Get(mapName, metav1.GetOptions{})
 	if err != nil {
-		glog.Fatalf("Error retrieving azure-config configmap %s: %v", mapName, err)
+		glog.Fatalf("Error retrieving required configmap %s: %v", mapName, err)
 	}
 
 	authJSON := cm.Data["AZURE_AUTH_JSON"]
 
-	authFile := "azureauth-ksrjtnfowfekj.json" // temporary keyboard spew, TODO: uniqueify
-	err = ioutil.WriteFile(authFile, []byte(authJSON), 0)
+	authFile, err := ioutil.TempFile("", "azl7ic_configmap_")
 	if err != nil {
-		glog.Fatalf("Error writing azure config to temp file: %v", err)
+		glog.Fatalf("Error getting temp file to save Azure auth info %s: %v", mapName, err)
+	}
+	_, err = authFile.Write([]byte(authJSON))
+	if err != nil {
+		glog.Fatalf("Error writing Azure auth info to temp file: %v", err)
 	}
 
-	os.Setenv("AZURE_AUTH_LOCATION", authFile)
+	os.Setenv("AZURE_AUTH_LOCATION", authFile.Name())
 	authn, err := auth.GetClientSetup(network.DefaultBaseURI)
 	if err != nil {
 		glog.Fatalf("Error creating Azure client from config: %v", err)
@@ -220,7 +204,7 @@ func azAuthFromConfigMap(kubeclient kubernetes.Interface, mapName string) auth.C
 func azureConfigFromConfigMap(kubeclient kubernetes.Interface, mapName string) context.AzureConfig {
 	cm, err := kubeclient.CoreV1().ConfigMaps("default").Get(mapName, metav1.GetOptions{})
 	if err != nil {
-		glog.Fatalf("Error retrieving azure-config configmap %s: %v", mapName, err)
+		glog.Fatalf("Error retrieving required configmap %s: %v", mapName, err)
 	}
 
 	resourceGroup, ok := cm.Data["AZURE_RESOURCE_GROUP"]

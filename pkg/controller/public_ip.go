@@ -18,12 +18,13 @@ func (lbc *LoadBalancerController) putPublicIP(publicIP network.PublicIPAddress)
 
 	rsrc := <-rsrcch
 
-	glog.V(1).Infof("created or updated %s with IP addr %s", safe(rsrc.Name), safe(rsrc.IPAddress))
+	rsrcName := safe(rsrc.Name)
+	rsrcIPAddress := safe(rsrc.IPAddress)  // TODO: apparently sometimes this can panic with a NPE - implies name is set but properties is nil (because .IPAddress is shorthand for .<properties>.IPAddress)
+	glog.V(1).Infof("created or updated %s with IP addr %s", rsrcName, rsrcIPAddress)
 
 	return &rsrc, nil
 }
 
-// PIPGet gets the pips
 func (lbc *LoadBalancerController) getPublicIP(publicIP network.PublicIPAddress) (*network.PublicIPAddress, error) {
 	client := network.NewPublicIPAddressesClientWithBaseURI(lbc.azureAuth.BaseURI, lbc.azureAuth.SubscriptionID)
 	client.Authorizer = lbc.azureAuth
