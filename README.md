@@ -1,3 +1,6 @@
+# Project Status: DEPRECATED
+
+This project is currently **deprecated**. Please refer to the following project: https://github.com/Azure/application-gateway-kubernetes-ingress for further work.
 
 # Contributing
 
